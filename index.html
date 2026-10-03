@@ -32,7 +32,19 @@
   button:disabled { opacity: 0.55; cursor: default; }
   button.danger { background: transparent; border-color: transparent; color: var(--bad); width: 100%; padding: 8px; font-size: 0.9rem; }
   button.link { background: transparent; border: none; color: var(--muted); text-decoration: underline; padding: 6px 0; font-size: 0.88rem; }
+  .manualform .form { border-top: none; padding-top: 14px; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .muted.bad { color: var(--bad); }
+  .brew.byhand { border-left: 3px solid var(--accent); }
+  .trash { display: flex; justify-content: space-between; gap: 12px; }
+  button.link.bad { color: var(--bad); }
   .brew.gone { opacity: 0.55; border-style: dashed; }
+  .chips { display: flex; gap: 8px; margin: 4px 0 2px; }
+  .chips button { border-radius: 999px; padding: 6px 14px; font-size: 0.88rem; }
+  .chips button.on { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+  .pager { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 12px 0 4px; }
+  .pager button { padding: 8px 14px; font-size: 0.9rem; }
+  a { color: var(--accent); }
   .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 4px; }
   .actions > * { flex: 1 1 auto; text-align: center; font-size: 0.9rem; }
   .filebtn input { display: none; }
@@ -82,10 +94,45 @@
     or import a backup you saved earlier.
   </div>
 
+  <div id="filters" class="chips" hidden>
+    <button data-mode="all">All</button>
+    <button data-mode="espresso">Espresso</button>
+    <button data-mode="pour-over">Pour-over</button>
+  </div>
+
   <div id="list"></div>
-  <button id="deleted" class="link" hidden></button>
+  <p id="nomatch" class="muted" hidden>No brews of this type.</p>
+  <div id="pager" class="pager" hidden>
+    <button id="newer">‹ Newer</button>
+    <span id="pageinfo" class="muted"></span>
+    <button id="older">Older ›</button>
+  </div>
+  <div class="trash">
+    <button id="deleted" class="link" hidden></button>
+    <button id="purge" class="link bad" hidden></button>
+  </div>
+
+  <div id="manual" class="brew manualform" hidden>
+    <div class="form">
+      <strong>Add a brew by hand</strong>
+      <label><span>Date and time</span><input id="m-when" type="datetime-local"></label>
+      <label><span>Type</span>
+        <select id="m-mode"><option value="espresso">Espresso</option><option value="pour-over">Pour-over</option></select>
+      </label>
+      <label><span>Dose (g), optional</span><input id="m-dose" type="number" min="1" max="100" step="0.1" inputmode="decimal"></label>
+      <label><span>Yield (g)</span><input id="m-yield" type="number" min="0" step="0.1" inputmode="decimal"></label>
+      <div class="two">
+        <label><span>Time, minutes</span><input id="m-min" type="number" min="0" step="1" inputmode="numeric" placeholder="0"></label>
+        <label><span>seconds</span><input id="m-sec" type="number" min="0" max="59" step="1" inputmode="numeric" placeholder="0"></label>
+      </div>
+      <div id="m-error" class="muted bad"></div>
+      <button id="m-save" class="primary" type="button">Add brew</button>
+      <button id="m-cancel" class="link" type="button">Cancel</button>
+    </div>
+  </div>
 
   <div class="actions">
+    <button id="addmanual">Add brew by hand</button>
     <button id="csv">Export CSV</button>
     <button id="backup">Export backup</button>
     <label class="filebtn">Import backup<input id="import" type="file" accept=".json,.txt,application/json,text/plain"></label>
@@ -95,8 +142,13 @@
     the history. Export a backup now and then: it holds everything, including your notes, and can be
     imported on any device. The CSV is for spreadsheets.
   </p>
+  <p class="muted">
+    Unofficial tool, not affiliated with MAVO. Use at your own risk:
+    <a href="https://github.com/mghdevfun/mavo-brew-data#disclaimer">read the disclaimer</a>.
+  </p>
 </main>
 <datalist id="coffees"></datalist>
+<datalist id="grinders"></datalist>
 <script src="app.js"></script>
 </body>
 </html>

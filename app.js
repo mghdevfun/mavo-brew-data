@@ -121,28 +121,56 @@ function flowOf(b) {
   return b.weight !== null && b.seconds ? b.weight / b.seconds : null;
 }
 
+// Two decimals, like the ratio. The scale itself shows one decimal, cut off without
+// rounding up, so 1.37 here reads as 1.3 on its screen.
+function flowText(f) {
+  return f.toFixed(2);
+}
+
+// Brews typed in by hand live in the notes store (key "manual:…") and are slotted into
+// the scale's list by time. Log brews without a date keep their place in log order.
+function withManual(parsed, notes) {
+  let last = 0;
+  const all = parsed.map((b, i) => {
+    if (b.when) last = b.when;
+    return { ...b, num: i + 1, sort: last };
+  });
+  for (const n of Object.values(notes)) {
+    if (!n.manual) continue;
+    all.push({
+      key: n.key, manual: true, synced: null, clock: "", mode: n.manual.mode, dose: null,
+      weight: n.manual.weight, seconds: n.manual.seconds, flag: "", when: n.manual.when, sort: n.manual.when,
+    });
+  }
+  return all.map((b, i) => [b, i]).sort((x, y) => x[0].sort - y[0].sort || x[1] - y[1]).map((x) => x[0]);
+}
+
+function labelOf(b, i) {
+  return b.manual ? "manual" : "#" + (b.num || i + 1);
+}
+
 function toCsv(brews, notes) {
   const esc = (v) => {
     const s = v === null || v === undefined ? "" : String(v);
     return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   };
   const head = ["brew", "brewed_at", "synced", "scale_clock", "mode", "dose_g", "dose_source", "yield_g", "ratio", "time_s",
-    "avg_flow_g_per_s", "coffee", "grind", "rating", "taste_notes", "flag"];
+    "avg_flow_g_per_s", "coffee", "grinder", "grind", "rating", "taste_notes", "flag"];
   const rows = brews.map((b, i) => {
     const n = notes[b.key] || {};
     if (n.deleted) return null;
     const r = ratioOf(b, n), f = flowOf(b), dose = doseOf(b, n);
-    return [i + 1, b.when ? new Date(b.when).toISOString() : "",
+    return [b.manual ? "manual" : b.num || i + 1, b.when ? new Date(b.when).toISOString() : "",
       b.synced ? new Date(b.synced).toISOString() : "", b.clock, b.mode,
       dose ? dose.toFixed(1) : "", dose ? (n.dose ? "manual" : "scale") : "",
       b.weight !== null ? b.weight.toFixed(1) : "",
       r ? r.toFixed(2) : "", b.seconds, f ? f.toFixed(2) : "",
-      n.coffee, n.grind, n.rating, n.taste, b.flag].map(esc).join(",");
+      n.coffee, n.grinder, n.grind, n.rating, n.taste, b.flag].map(esc).join(",");
   });
   return [head.join(","), ...rows.filter(Boolean)].join("\n") + "\n";
 }
 
-if (typeof module !== "undefined") module.exports = { parseBrews, toCsv, clockCommand: () => clockCommand() };
+if (typeof module !== "undefined") module.exports = { parseBrews, toCsv, withManual, clockCommand: () => clockCommand() };
 
 // ---------- Storage ----------
 
@@ -253,7 +281,8 @@ async function pullLog(onProgress) {
 if (typeof document !== "undefined") (async function main() {
   const $ = (id) => document.getElementById(id);
   const db = await openDb();
-  let brews = [], notes = {}, showDeleted = false;
+  const PAGE_SIZE = 20;
+  let brews = [], notes = {}, showDeleted = false, filter = "all", page = 0;
 
   const setStatus = (msg, bad) => {
     $("status").textContent = msg;
@@ -264,7 +293,7 @@ if (typeof document !== "undefined") (async function main() {
     const pulls = (await tx(db, "pulls", "readonly", (s) => s.getAll())) || [];
     const noteRows = (await tx(db, "notes", "readonly", (s) => s.getAll())) || [];
     notes = Object.fromEntries(noteRows.map((n) => [n.key, n]));
-    brews = parseBrews(pulls);
+    brews = withManual(parseBrews(pulls), notes);
     render();
     $("empty").hidden = pulls.length > 0;
     refreshCount();
@@ -272,11 +301,16 @@ if (typeof document !== "undefined") (async function main() {
 
   // Deleting only hides a brew: the raw log it came from is kept, so it can be restored.
   function refreshCount() {
-    const gone = brews.filter((b) => (notes[b.key] || {}).deleted).length;
-    const kept = brews.length - gone;
-    $("count").textContent = brews.length ? `${kept} brew${kept === 1 ? "" : "s"}` : "";
+    const note = (b) => notes[b.key] || {};
+    const gone = brews.filter((b) => note(b).deleted && !note(b).purged).length; // in the trash
+    const kept = brews.filter((b) => !note(b).deleted).length;
+    const shown = brews.filter((b) => !(notes[b.key] || {}).deleted && (filter === "all" || b.mode === filter)).length;
+    $("count").textContent = !brews.length ? "" : filter === "all"
+      ? `${kept} brew${kept === 1 ? "" : "s"}` : `${shown} of ${kept} brews`;
     $("deleted").hidden = gone === 0;
-    $("deleted").textContent = showDeleted ? "Hide deleted" : `Show deleted (${gone})`;
+    $("deleted").textContent = showDeleted ? "Back to brews" : `Show deleted (${gone})`;
+    $("purge").hidden = !showDeleted;
+    $("purge").textContent = `Empty trash (${gone})`;
   }
 
   async function addPull(text, time, imported) {
@@ -291,15 +325,43 @@ if (typeof document !== "undefined") (async function main() {
     return wrap;
   }
 
+  // Coffees and grinders typed before are offered again on other brews.
+  function refreshSuggestions() {
+    for (const [id, key] of [["coffees", "coffee"], ["grinders", "grinder"]]) {
+      const values = [...new Set(Object.values(notes).map((n) => n[key]).filter(Boolean))];
+      $(id).replaceChildren(...values.map((v) => Object.assign(document.createElement("option"), { value: v })));
+    }
+  }
+
   function render() {
     const list = $("list");
     list.replaceChildren();
-    const coffees = [...new Set(Object.values(notes).map((n) => n.coffee).filter(Boolean))];
-    $("coffees").replaceChildren(...coffees.map((c) => Object.assign(document.createElement("option"), { value: c })));
+    refreshSuggestions();
 
+    // Leave the trash view once it is empty, so the list never ends up blank.
+    if (showDeleted && !brews.some((b) => { const n = notes[b.key] || {}; return n.deleted && !n.purged; })) showDeleted = false;
+
+    // Newest first, narrowed by the type filter, then cut into pages.
+    const visible = [];
     for (let i = brews.length - 1; i >= 0; i--) {
+      const { deleted, purged } = notes[brews[i].key] || {};
+      if (purged || !!deleted !== showDeleted) continue; // the trash view lists deleted brews only
+      if (filter !== "all" && brews[i].mode !== filter) continue;
+      visible.push(i);
+    }
+    const pages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+    page = Math.min(page, pages - 1);
+    $("filters").hidden = brews.length === 0;
+    for (const chip of $("filters").children) chip.classList.toggle("on", chip.dataset.mode === filter);
+    $("pager").hidden = pages < 2;
+    $("pageinfo").textContent = `Page ${page + 1} of ${pages}`;
+    $("newer").disabled = page === 0;
+    $("older").disabled = page >= pages - 1;
+    $("nomatch").hidden = visible.length > 0 || brews.length === 0;
+    refreshCount();
+
+    for (const i of visible.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)) {
       const b = brews[i], n = notes[b.key] || { key: b.key };
-      if (n.deleted && !showDeleted) continue;
       const f = flowOf(b);
       const card = document.createElement("details");
       card.className = n.deleted ? "brew gone" : "brew";
@@ -308,12 +370,13 @@ if (typeof document !== "undefined") (async function main() {
       const top = document.createElement("div");
       top.className = "top";
       const title = document.createElement("strong");
-      title.textContent = `#${i + 1} · ${b.mode}`;
+      title.textContent = `${labelOf(b, i)} · ${b.mode}`;
       const when = document.createElement("span");
       when.className = "muted";
       when.textContent = b.when
         ? new Date(b.when).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZoneName: "short" })
         : `scale clock ${b.clock}`;
+      if (b.manual) card.classList.add("byhand");
       top.append(title, when);
 
       const stats = document.createElement("div");
@@ -340,7 +403,7 @@ if (typeof document !== "undefined") (async function main() {
         stat(b.weight !== null ? b.weight.toFixed(1) : "–", "yield g"),
         ratioStat,
         stat(`${Math.floor(b.seconds / 60)}:${String(b.seconds % 60).padStart(2, "0")}`, "time"),
-        stat(f ? f.toFixed(1) : "–", "g/s"),
+        stat(f ? flowText(f) : "–", "g/s"),
       );
       sum.append(top, stats);
 
@@ -352,7 +415,8 @@ if (typeof document !== "undefined") (async function main() {
       const pill = document.createElement("span");
       pill.className = "pill";
       const showPreview = () => {
-        const parts = [n.coffee, n.rating ? "★".repeat(n.rating) : "", n.taste].filter(Boolean);
+        const grindText = n.grind ? `grind ${n.grind}${n.grinder ? ` (${n.grinder})` : ""}` : n.grinder;
+        const parts = [n.coffee, grindText, n.rating ? "★".repeat(n.rating) : "", n.taste].filter(Boolean);
         preview.textContent = [b.flag, ...parts].filter(Boolean).join(" · ");
         pill.textContent = parts.length ? "Edit notes" : "Add notes";
         pill.classList.toggle("quiet", parts.length > 0);
@@ -366,6 +430,8 @@ if (typeof document !== "undefined") (async function main() {
       form.className = "form";
       const coffee = Object.assign(document.createElement("input"), { value: n.coffee || "", placeholder: "Beans, roaster" });
       coffee.setAttribute("list", "coffees");
+      const grinder = Object.assign(document.createElement("input"), { value: n.grinder || "", placeholder: "Grinder name" });
+      grinder.setAttribute("list", "grinders");
       const grind = Object.assign(document.createElement("input"), { value: n.grind || "", placeholder: "Grinder setting" });
       const rating = document.createElement("select");
       for (const v of ["", 1, 2, 3, 4, 5]) {
@@ -375,7 +441,7 @@ if (typeof document !== "undefined") (async function main() {
       const taste = Object.assign(document.createElement("textarea"), { value: n.taste || "", rows: 2, placeholder: "How it tasted" });
       // Clearing the field, or typing the logged value, goes back to the scale's reading.
       const doseInput = Object.assign(document.createElement("input"), {
-        type: "number", min: 1, max: 40, step: 0.1, inputMode: "decimal", value: doseOf(b, n) || "",
+        type: "number", min: 1, max: 100, step: 0.1, inputMode: "decimal", value: doseOf(b, n) || "",
         placeholder: b.dose ? `Scale logged ${b.dose.toFixed(1)}` : "Not logged by the scale",
       });
       form.append(field(b.dose ? `Dose (g) · scale logged ${b.dose.toFixed(1)}` : "Dose (g)", doseInput));
@@ -384,28 +450,63 @@ if (typeof document !== "undefined") (async function main() {
         card.open = true;
         doseInput.focus();
       });
-      form.append(field("Coffee", coffee), field("Grind", grind), field("Rating", rating), field("Taste", taste));
+      // A brew entered by hand can have its own figures corrected; they apply on Save.
+      let manualEdit = null;
+      if (b.manual) {
+        const when = Object.assign(document.createElement("input"), { type: "datetime-local", value: localStamp(b.when) });
+        const kind = document.createElement("select");
+        for (const [v, t] of [["espresso", "Espresso"], ["pour-over", "Pour-over"]]) {
+          kind.append(Object.assign(document.createElement("option"), { value: v, textContent: t }));
+        }
+        kind.value = b.mode;
+        const num = (value, extra) => Object.assign(document.createElement("input"), { type: "number", min: 0, value, ...extra });
+        const yieldIn = num(b.weight, { step: 0.1, inputMode: "decimal" });
+        const mins = num(Math.floor(b.seconds / 60), { step: 1, inputMode: "numeric" });
+        const secs = num(b.seconds % 60, { step: 1, max: 59, inputMode: "numeric" });
+        const two = document.createElement("div");
+        two.className = "two";
+        two.append(field("Time, minutes", mins), field("seconds", secs));
+        form.append(field("Date and time", when), field("Type", kind), field("Yield (g)", yieldIn), two);
+        manualEdit = () => {
+          const m = {
+            when: new Date(when.value).getTime(), mode: kind.value,
+            weight: Math.round(parseFloat(yieldIn.value) * 10) / 10,
+            seconds: (parseInt(mins.value, 10) || 0) * 60 + (parseInt(secs.value, 10) || 0),
+          };
+          return m.when && m.weight > 0 && m.seconds > 0 ? m : null;
+        };
+      }
+      form.append(field("Coffee", coffee), field("Grinder", grinder), field("Grind setting", grind), field("Rating", rating), field("Taste", taste));
       const save = async () => {
-        Object.assign(n, { coffee: coffee.value.trim(), grind: grind.value.trim(), rating: Number(rating.value) || "", taste: taste.value.trim() });
+        Object.assign(n, { coffee: coffee.value.trim(), grinder: grinder.value.trim(), grind: grind.value.trim(), rating: Number(rating.value) || "", taste: taste.value.trim() });
         const d = Math.round(parseFloat(doseInput.value) * 10) / 10;
-        if (d >= 1 && d <= 40 && d !== b.dose) n.dose = d; else delete n.dose;
+        if (d >= 1 && d <= 100 && d !== b.dose) n.dose = d; else delete n.dose;
         if (!n.dose) doseInput.value = b.dose || "";
         showDose();
         notes[b.key] = n;
         await tx(db, "notes", "readwrite", (s) => s.put(n));
         showPreview();
+        refreshSuggestions();
       };
       form.addEventListener("change", save);
       const close = Object.assign(document.createElement("button"), { type: "button", className: "primary", textContent: "Save" });
       close.addEventListener("click", async () => {
         await save();
+        if (manualEdit) {
+          const m = manualEdit();
+          if (!m) return setStatus("That manual brew needs a date, a yield and a time.", true);
+          n.manual = m;
+          await tx(db, "notes", "readwrite", (s) => s.put(n));
+          await reload(); // its place in the list and its figures may have changed
+          return setStatus("Brew updated.");
+        }
         card.open = false;
       });
       const remove = Object.assign(document.createElement("button"), {
         type: "button", className: "danger", textContent: n.deleted ? "Restore brew" : "Delete brew",
       });
       remove.addEventListener("click", async () => {
-        if (!n.deleted && !confirm(`Delete brew #${i + 1}? You can restore it later from "Show deleted".`)) return;
+        if (!n.deleted && !confirm(`Delete brew ${b.manual ? "(manual entry)" : labelOf(b, i)}? You can restore it later from "Show deleted".`)) return;
         await save();
         if (n.deleted) delete n.deleted; else n.deleted = true;
         await tx(db, "notes", "readwrite", (s) => s.put(n));
@@ -417,6 +518,40 @@ if (typeof document !== "undefined") (async function main() {
       list.append(card);
     }
   }
+
+  // ----- Manual entry -----
+
+  const localStamp = (ms) => {
+    const d = new Date(ms - new Date(ms).getTimezoneOffset() * 60000);
+    return d.toISOString().slice(0, 16); // value format of <input type="datetime-local">
+  };
+
+  $("addmanual").addEventListener("click", () => {
+    $("manual").hidden = !$("manual").hidden;
+    if (!$("manual").hidden) {
+      $("m-when").value = localStamp(Date.now());
+      $("manual").scrollIntoView({ block: "center" });
+    }
+  });
+  $("m-cancel").addEventListener("click", () => { $("manual").hidden = true; });
+  $("m-save").addEventListener("click", async () => {
+    const when = new Date($("m-when").value).getTime();
+    const weight = Math.round(parseFloat($("m-yield").value) * 10) / 10;
+    const mins = parseInt($("m-min").value, 10) || 0, secs = parseInt($("m-sec").value, 10) || 0;
+    const seconds = mins * 60 + secs;
+    const dose = Math.round(parseFloat($("m-dose").value) * 10) / 10;
+    const problem = !when ? "Pick a date and time." : !(weight > 0) ? "Enter the yield in grams." : !(seconds > 0) ? "Enter the brew time." : "";
+    $("m-error").textContent = problem;
+    if (problem) return;
+    const n = { key: "manual:" + Date.now(), manual: { when, mode: $("m-mode").value, weight, seconds } };
+    if (dose >= 1 && dose <= 100) n.dose = dose;
+    await tx(db, "notes", "readwrite", (s) => s.put(n));
+    for (const id of ["m-yield", "m-dose", "m-min", "m-sec"]) $(id).value = "";
+    $("manual").hidden = true;
+    filter = "all"; showDeleted = false; page = 0;
+    await reload();
+    setStatus("Brew added. Open it to add notes.");
+  });
 
   function download(name, text, type) {
     const a = document.createElement("a");
@@ -490,9 +625,46 @@ if (typeof document !== "undefined") (async function main() {
 
   $("deleted").addEventListener("click", () => {
     showDeleted = !showDeleted;
+    page = 0;
     render();
-    refreshCount();
   });
+
+  // Emptying the trash drops the brews' notes and hides them for good. The raw log lines
+  // stay in storage because the neighbouring brews are worked out from the same text.
+  $("purge").addEventListener("click", async () => {
+    const trash = Object.values(notes).filter((n) => n.deleted && !n.purged);
+    if (!trash.length) return;
+    if (!confirm(`Permanently delete ${trash.length} brew${trash.length === 1 ? "" : "s"} and their notes? This cannot be undone.`)) return;
+    await new Promise((resolve, reject) => {
+      const t = db.transaction("notes", "readwrite");
+      for (const n of trash) {
+        const tomb = { key: n.key, deleted: true, purged: true };
+        notes[n.key] = tomb;
+        t.objectStore("notes").put(tomb);
+      }
+      t.oncomplete = resolve;
+      t.onerror = t.onabort = () => reject(t.error);
+    });
+    page = 0;
+    render();
+    setStatus(`Permanently deleted ${trash.length} brew${trash.length === 1 ? "" : "s"}.`);
+  });
+
+  $("filters").addEventListener("click", (ev) => {
+    const mode = ev.target.dataset.mode;
+    if (!mode) return;
+    filter = mode;
+    page = 0;
+    render();
+  });
+
+  const turn = (by) => {
+    page += by;
+    render();
+    $("filters").scrollIntoView({ block: "start" });
+  };
+  $("newer").addEventListener("click", () => turn(-1));
+  $("older").addEventListener("click", () => turn(1));
 
   $("csv").addEventListener("click", () => {
     download(`lumicurve-brews-${new Date().toISOString().slice(0, 10)}.csv`, toCsv(brews, notes), "text/csv");

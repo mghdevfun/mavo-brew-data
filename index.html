@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lumicurve brews</title>
+<style>
+  :root {
+    --bg: #f6f4f1; --card: #ffffff; --text: #1f1b18; --muted: #76706a;
+    --line: #e4dfd8; --accent: #7a4a2b; --accent-text: #ffffff; --bad: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #171412; --card: #221e1b; --text: #efe9e3; --muted: #a39a91;
+      --line: #36302b; --accent: #d39a6c; --accent-text: #1b1512; --bad: #ff8a80;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 640px; margin: 0 auto; padding: 16px 16px 48px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  h1 { font-size: 1.3rem; margin: 8px 0; }
+  .muted { color: var(--muted); font-size: 0.85rem; }
+  button, .filebtn {
+    font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--text);
+    border-radius: 10px; padding: 10px 14px; cursor: pointer;
+  }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; width: 100%; padding: 14px; }
+  button:disabled { opacity: 0.55; cursor: default; }
+  button.danger { background: transparent; border-color: transparent; color: var(--bad); width: 100%; padding: 8px; font-size: 0.9rem; }
+  button.link { background: transparent; border: none; color: var(--muted); text-decoration: underline; padding: 6px 0; font-size: 0.88rem; }
+  .brew.gone { opacity: 0.55; border-style: dashed; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 4px; }
+  .actions > * { flex: 1 1 auto; text-align: center; font-size: 0.9rem; }
+  .filebtn input { display: none; }
+  #status { min-height: 1.5em; margin: 10px 0; font-size: 0.9rem; color: var(--muted); }
+  #status.bad { color: var(--bad); }
+  #empty { background: var(--card); border: 1px dashed var(--line); border-radius: 12px; padding: 14px; font-size: 0.92rem; }
+  .brew { background: var(--card); border: 1px solid var(--line); border-radius: 12px; margin: 10px 0; }
+  .brew summary { list-style: none; padding: 12px 14px; cursor: pointer; }
+  .brew summary::-webkit-details-marker { display: none; }
+  .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; margin: 10px 0 6px; text-align: center; }
+  .stats b { display: block; font-size: 1.05rem; font-variant-numeric: tabular-nums; }
+  .stats small { color: var(--muted); font-size: 0.72rem; }
+  .stats b.add {
+    display: inline-block; font-size: 0.8rem; color: var(--accent); border: 1px solid var(--accent);
+    border-radius: 999px; padding: 1px 10px;
+  }
+  .foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 4px; }
+  .preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .pill {
+    flex: none; background: var(--accent); color: var(--accent-text); border: 1px solid var(--accent);
+    border-radius: 999px; padding: 6px 14px; font-size: 0.85rem; font-weight: 600;
+  }
+  .pill.quiet { background: transparent; color: var(--accent); }
+  .brew[open] .pill { display: none; }
+  .form { display: grid; gap: 10px; padding: 4px 14px 14px; border-top: 1px solid var(--line); }
+  .form label { display: grid; gap: 4px; }
+  .form label span { font-size: 0.78rem; color: var(--muted); }
+  input, select, textarea {
+    font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; width: 100%;
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Lumicurve brews</h1>
+    <span id="count" class="muted"></span>
+  </header>
+
+  <button id="sync" class="primary">Connect and sync</button>
+  <div id="status"></div>
+
+  <div id="empty" hidden>
+    No brews yet. Wake the scale, unplug it from the charger and press <b>Connect and sync</b>,
+    or import a backup you saved earlier.
+  </div>
+
+  <div id="list"></div>
+  <button id="deleted" class="link" hidden></button>
+
+  <div class="actions">
+    <button id="csv">Export CSV</button>
+    <button id="backup">Export backup</button>
+    <label class="filebtn">Import backup<input id="import" type="file" accept=".json,.txt,application/json,text/plain"></label>
+  </div>
+  <p class="muted">
+    Syncing moves the log off the scale and into this browser, so clearing this site's data would erase
+    the history. Export a backup now and then: it holds everything, including your notes, and can be
+    imported on any device. The CSV is for spreadsheets.
+  </p>
+</main>
+<datalist id="coffees"></datalist>
+<script src="app.js"></script>
+</body>
+</html>

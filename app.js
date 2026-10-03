@@ -1,6 +1,10 @@
 // MAVO Lumicurve brew log: pulls the scale's debug log over Web Bluetooth,
 // keeps every pull in IndexedDB and derives the brew list from it.
 
+// The version tag index.html loaded this file with (see tools/stamp.py); shown in the footer.
+const VERSION = typeof document !== "undefined" && document.currentScript
+  ? new URL(document.currentScript.src).searchParams.get("v") : null;
+
 // ---------- Log parsing (pure, also used by the Node test) ----------
 
 const RE_WEIGHT = /\[SW\] (?:com )?(?:restart=(-?\d+),|lock=\d+-(\d+)-(\d),)/;
@@ -676,6 +680,7 @@ if (typeof document !== "undefined") (async function main() {
     download(`lumicurve-backup-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(backup), "application/json");
   });
 
+  if (VERSION) $("version").textContent = `Version ${VERSION}.`;
   if (!navigator.bluetooth) {
     $("sync").disabled = true;
     setStatus("This browser has no Web Bluetooth. Use Chrome or Edge.", true);

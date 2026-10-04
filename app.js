@@ -333,7 +333,6 @@ if (typeof document !== "undefined") (async function main() {
   function matches(b) {
     const n = notes[b.key] || {};
     if (filter !== "all" && b.mode !== filter) return false;
-    if (bagFilter === "none") return !coffeeOf(n, bags);
     return bagFilter === "all" || n.bag === bagFilter;
   }
 
@@ -373,12 +372,13 @@ if (typeof document !== "undefined") (async function main() {
     $("bagcount").textContent = all.length ? `${open} open${all.length > open ? `, ${all.length - open} finished` : ""}` : "none yet";
 
     const pick = $("bagfilter");
-    if (bagFilter !== "all" && bagFilter !== "none" && !bags[bagFilter]) bagFilter = "all";
+    // Only bags still in use can be filtered on; with no filter, every brew is listed.
+    if (bagFilter !== "all" && (!bags[bagFilter] || bags[bagFilter].finished)) bagFilter = "all";
     pick.replaceChildren(
       Object.assign(document.createElement("option"), { value: "all", textContent: "All coffees" }),
-      ...all.map((b) => Object.assign(document.createElement("option"), { value: b.id, textContent: bagLabel(b) + (b.finished ? " (finished)" : "") })),
-      Object.assign(document.createElement("option"), { value: "none", textContent: "No coffee set" }),
+      ...all.filter((b) => !b.finished).map((b) => Object.assign(document.createElement("option"), { value: b.id, textContent: bagLabel(b) })),
     );
+    pick.hidden = open === 0;
     pick.value = bagFilter;
 
     $("baglist").replaceChildren(...all.map((bag) => {
@@ -784,6 +784,48 @@ if (typeof document !== "undefined") (async function main() {
     page = 0;
     render();
     setStatus(`Permanently deleted ${trash.length} brew${trash.length === 1 ? "" : "s"}.`);
+  });
+
+  // Clean-up: permanently drop brews older than KEEP_DAYS and bags marked finished.
+  // A brew without a date of its own is aged by the sync that brought it in.
+  const KEEP_DAYS = 100;
+  $("cleanup").addEventListener("click", async () => {
+    const cutoff = Date.now() - KEEP_DAYS * DAY * 1000;
+    const old = brews.filter((b) => {
+      const age = b.when || b.synced;
+      return !(notes[b.key] || {}).purged && age && age < cutoff;
+    });
+    const oldKeys = new Set(old.map((b) => b.key));
+    const done = Object.values(bags).filter((b) => b.finished);
+    if (!old.length && !done.length) {
+      return setStatus(`Nothing to clean up: no brews older than ${KEEP_DAYS} days and no finished bags.`);
+    }
+    const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+    if (!confirm(`Permanently delete ${plural(old.length, "brew")} older than ${KEEP_DAYS} days and ${plural(done.length, "finished bag")}?\n\n`
+      + "Newer brews are kept, including ones that used a finished bag: they keep the coffee's name.\n\n"
+      + "This cannot be undone. Export a backup first if you might want them back.")) return;
+    await new Promise((resolve, reject) => {
+      const t = db.transaction(["notes", "bags"], "readwrite");
+      const noteStore = t.objectStore("notes"), bagStore = t.objectStore("bags");
+      for (const b of old) {
+        if (b.manual) noteStore.delete(b.key);
+        else noteStore.put({ key: b.key, deleted: true, purged: true });
+      }
+      for (const bag of done) {
+        for (const n of Object.values(notes)) {
+          if (n.bag !== bag.id || oldKeys.has(n.key) || n.purged) continue;
+          delete n.bag;
+          n.coffee = bag.name; // keep the name on the brews that stay
+          noteStore.put(n);
+        }
+        bagStore.delete(bag.id);
+      }
+      t.oncomplete = resolve;
+      t.onerror = t.onabort = () => reject(t.error);
+    });
+    page = 0;
+    await reload();
+    setStatus(`Cleaned up: ${plural(old.length, "brew")} and ${plural(done.length, "finished bag")} deleted.`);
   });
 
   $("bagfilter").addEventListener("change", () => {

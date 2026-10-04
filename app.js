@@ -185,7 +185,9 @@ if (typeof module !== "undefined") module.exports = { parseBrews, toCsv, withMan
 
 // ---------- Storage ----------
 
-function openDb() {
+// onWaiting fires when another tab still holds the database in an older format; the open
+// then completes by itself as soon as that tab is closed.
+function openDb(onWaiting) {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open("lumicurve", 2); // 2: added the coffee bags store
     req.onupgradeneeded = () => {
@@ -195,6 +197,7 @@ function openDb() {
       if (!have.contains("notes")) db.createObjectStore("notes", { keyPath: "key" });
       if (!have.contains("bags")) db.createObjectStore("bags", { keyPath: "id" });
     };
+    req.onblocked = () => onWaiting && onWaiting();
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
@@ -292,7 +295,19 @@ async function pullLog(onProgress) {
 
 if (typeof document !== "undefined") (async function main() {
   const $ = (id) => document.getElementById(id);
-  const db = await openDb();
+  const db = await openDb(() => {
+    $("status").textContent = "This app is open in another tab or window with an older version. Close that one and this page will continue.";
+    $("status").classList.add("bad");
+  });
+  $("status").textContent = "";
+  $("status").classList.remove("bad");
+  // If a newer version opens elsewhere later, step aside instead of blocking it.
+  db.onversionchange = () => {
+    db.close();
+    $("status").textContent = "A newer version of the app was opened in another tab. Reload this page.";
+    $("status").classList.add("bad");
+    $("sync").disabled = true;
+  };
   const PAGE_SIZE = 20;
   let brews = [], notes = {}, bags = {}, showDeleted = false, filter = "all", bagFilter = "all", page = 0;
   let editingBag = null;
@@ -361,7 +376,7 @@ if (typeof document !== "undefined") (async function main() {
     if (bagFilter !== "all" && bagFilter !== "none" && !bags[bagFilter]) bagFilter = "all";
     pick.replaceChildren(
       Object.assign(document.createElement("option"), { value: "all", textContent: "All coffees" }),
-      ...all.map((b) => Object.assign(document.createElement("option"), { value: b.id, textContent: b.name + (b.finished ? " (finished)" : "") })),
+      ...all.map((b) => Object.assign(document.createElement("option"), { value: b.id, textContent: bagLabel(b) + (b.finished ? " (finished)" : "") })),
       Object.assign(document.createElement("option"), { value: "none", textContent: "No coffee set" }),
     );
     pick.value = bagFilter;

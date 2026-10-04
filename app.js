@@ -153,13 +153,19 @@ function labelOf(b, i) {
   return b.manual ? "manual" : "#" + (b.num || i + 1);
 }
 
-function toCsv(brews, notes) {
+// A brew's coffee is a bag picked from the list; notes from before bags existed hold typed text.
+function coffeeOf(n, bags) {
+  const bag = n && n.bag && bags ? bags[n.bag] : null;
+  return bag ? bag.name : (n && n.coffee) || "";
+}
+
+function toCsv(brews, notes, bags = {}) {
   const esc = (v) => {
     const s = v === null || v === undefined ? "" : String(v);
     return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   };
   const head = ["brew", "brewed_at", "synced", "scale_clock", "mode", "dose_g", "dose_source", "yield_g", "ratio", "time_s",
-    "avg_flow_g_per_s", "coffee", "grinder", "grind", "rating", "taste_notes", "flag"];
+    "avg_flow_g_per_s", "coffee", "roaster", "roast_date", "grinder", "grind", "rating", "taste_notes", "flag"];
   const rows = brews.map((b, i) => {
     const n = notes[b.key] || {};
     if (n.deleted) return null;
@@ -169,23 +175,25 @@ function toCsv(brews, notes) {
       dose ? dose.toFixed(1) : "", dose ? (n.dose ? "manual" : "scale") : "",
       b.weight !== null ? b.weight.toFixed(1) : "",
       r ? r.toFixed(2) : "", b.seconds, f ? f.toFixed(2) : "",
-      n.coffee, n.grinder, n.grind, n.rating, n.taste, b.flag].map(esc).join(",");
+      coffeeOf(n, bags), (bags[n.bag] || {}).roaster, (bags[n.bag] || {}).roasted,
+      n.grinder, n.grind, n.rating, n.taste, b.flag].map(esc).join(",");
   });
   return [head.join(","), ...rows.filter(Boolean)].join("\n") + "\n";
 }
 
-if (typeof module !== "undefined") module.exports = { parseBrews, toCsv, withManual, clockCommand: () => clockCommand() };
+if (typeof module !== "undefined") module.exports = { parseBrews, toCsv, withManual, coffeeOf, clockCommand: () => clockCommand() };
 
 // ---------- Storage ----------
 
 function openDb() {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open("lumicurve", 1);
+    const req = indexedDB.open("lumicurve", 2); // 2: added the coffee bags store
     req.onupgradeneeded = () => {
-      const db = req.result;
-      db.createObjectStore("pulls", { keyPath: "id", autoIncrement: true });
-      db.createObjectStore("partials", { keyPath: "id", autoIncrement: true });
-      db.createObjectStore("notes", { keyPath: "key" });
+      const db = req.result, have = db.objectStoreNames;
+      if (!have.contains("pulls")) db.createObjectStore("pulls", { keyPath: "id", autoIncrement: true });
+      if (!have.contains("partials")) db.createObjectStore("partials", { keyPath: "id", autoIncrement: true });
+      if (!have.contains("notes")) db.createObjectStore("notes", { keyPath: "key" });
+      if (!have.contains("bags")) db.createObjectStore("bags", { keyPath: "id" });
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -286,7 +294,8 @@ if (typeof document !== "undefined") (async function main() {
   const $ = (id) => document.getElementById(id);
   const db = await openDb();
   const PAGE_SIZE = 20;
-  let brews = [], notes = {}, showDeleted = false, filter = "all", page = 0;
+  let brews = [], notes = {}, bags = {}, showDeleted = false, filter = "all", bagFilter = "all", page = 0;
+  let editingBag = null;
 
   const setStatus = (msg, bad) => {
     $("status").textContent = msg;
@@ -297,6 +306,7 @@ if (typeof document !== "undefined") (async function main() {
     const pulls = (await tx(db, "pulls", "readonly", (s) => s.getAll())) || [];
     const noteRows = (await tx(db, "notes", "readonly", (s) => s.getAll())) || [];
     notes = Object.fromEntries(noteRows.map((n) => [n.key, n]));
+    bags = Object.fromEntries(((await tx(db, "bags", "readonly", (s) => s.getAll())) || []).map((b) => [b.id, b]));
     brews = withManual(parseBrews(pulls), notes);
     render();
     $("empty").hidden = pulls.length > 0;
@@ -304,12 +314,20 @@ if (typeof document !== "undefined") (async function main() {
   }
 
   // Deleting only hides a brew: the raw log it came from is kept, so it can be restored.
+  // Type and coffee filters, shared by the list and the counter.
+  function matches(b) {
+    const n = notes[b.key] || {};
+    if (filter !== "all" && b.mode !== filter) return false;
+    if (bagFilter === "none") return !coffeeOf(n, bags);
+    return bagFilter === "all" || n.bag === bagFilter;
+  }
+
   function refreshCount() {
     const note = (b) => notes[b.key] || {};
     const gone = brews.filter((b) => note(b).deleted && !note(b).purged).length; // in the trash
     const kept = brews.filter((b) => !note(b).deleted).length;
-    const shown = brews.filter((b) => !(notes[b.key] || {}).deleted && (filter === "all" || b.mode === filter)).length;
-    $("count").textContent = !brews.length ? "" : filter === "all"
+    const shown = brews.filter((b) => !note(b).deleted && matches(b)).length;
+    $("count").textContent = !brews.length ? "" : filter === "all" && bagFilter === "all"
       ? `${kept} brew${kept === 1 ? "" : "s"}` : `${shown} of ${kept} brews`;
     $("deleted").hidden = gone === 0;
     $("deleted").textContent = showDeleted ? "Back to brews" : `Show deleted (${gone})`;
@@ -329,9 +347,80 @@ if (typeof document !== "undefined") (async function main() {
     return wrap;
   }
 
+  const bagLabel = (bag) => [bag.name, bag.roaster, bag.roasted && "roasted " + bag.roasted].filter(Boolean).join(" · ");
+  const bagList = () => Object.values(bags).sort((a, b) => !!a.finished - !!b.finished || b.added - a.added);
+  const brewsWith = (id) => brews.filter((b) => { const n = notes[b.key] || {}; return n.bag === id && !n.deleted; }).length;
+
+  // The bags panel and the coffee filter.
+  function renderBags() {
+    const all = bagList();
+    const open = all.filter((b) => !b.finished).length;
+    $("bagcount").textContent = all.length ? `${open} open${all.length > open ? `, ${all.length - open} finished` : ""}` : "none yet";
+
+    const pick = $("bagfilter");
+    if (bagFilter !== "all" && bagFilter !== "none" && !bags[bagFilter]) bagFilter = "all";
+    pick.replaceChildren(
+      Object.assign(document.createElement("option"), { value: "all", textContent: "All coffees" }),
+      ...all.map((b) => Object.assign(document.createElement("option"), { value: b.id, textContent: b.name + (b.finished ? " (finished)" : "") })),
+      Object.assign(document.createElement("option"), { value: "none", textContent: "No coffee set" }),
+    );
+    pick.value = bagFilter;
+
+    $("baglist").replaceChildren(...all.map((bag) => {
+      const row = document.createElement("div");
+      row.className = bag.finished ? "bag done" : "bag";
+      const text = document.createElement("div");
+      const used = brewsWith(bag.id);
+      const name = document.createElement("b");
+      name.textContent = bag.name;
+      const info = document.createElement("small");
+      info.className = "muted";
+      info.textContent = [bag.roaster, bag.roasted && "roasted " + bag.roasted, `${used} brew${used === 1 ? "" : "s"}`, bag.finished && "finished"].filter(Boolean).join(" · ");
+      text.append(name, info);
+      const act = (label, fn, cls) => {
+        const b = Object.assign(document.createElement("button"), { type: "button", className: "link" + (cls ? " " + cls : ""), textContent: label });
+        b.addEventListener("click", fn);
+        return b;
+      };
+      const buttons = document.createElement("div");
+      buttons.className = "bagacts";
+      buttons.append(
+        act("Edit", () => {
+          editingBag = bag.id;
+          $("b-name").value = bag.name; $("b-roaster").value = bag.roaster || ""; $("b-roast").value = bag.roasted || "";
+          $("b-title").textContent = "Edit bag"; $("b-save").textContent = "Save bag"; $("b-cancel").hidden = false;
+          $("b-name").focus();
+        }),
+        // A finished bag stays on the brews that used it but is no longer offered for new ones.
+        act(bag.finished ? "Reopen" : "Finished", async () => {
+          bag.finished = !bag.finished;
+          await tx(db, "bags", "readwrite", (s) => s.put(bag));
+          render();
+        }),
+      );
+      if (used === 0) {
+        buttons.append(act("Delete", async () => {
+          if (!confirm(`Delete the bag "${bag.name}"?`)) return;
+          await tx(db, "bags", "readwrite", (s) => s.delete(bag.id));
+          delete bags[bag.id];
+          render();
+        }, "bad"));
+      }
+      row.append(text, buttons);
+      return row;
+    }));
+  }
+
+  function resetBagForm() {
+    editingBag = null;
+    for (const id of ["b-name", "b-roaster", "b-roast"]) $(id).value = "";
+    $("b-title").textContent = "Add a bag"; $("b-save").textContent = "Add bag"; $("b-cancel").hidden = true;
+    $("b-error").textContent = "";
+  }
+
   // Coffees and grinders typed before are offered again on other brews.
   function refreshSuggestions() {
-    for (const [id, key] of [["coffees", "coffee"], ["grinders", "grinder"]]) {
+    for (const [id, key] of [["grinders", "grinder"]]) {
       const values = [...new Set(Object.values(notes).map((n) => n[key]).filter(Boolean))];
       $(id).replaceChildren(...values.map((v) => Object.assign(document.createElement("option"), { value: v })));
     }
@@ -342,6 +431,8 @@ if (typeof document !== "undefined") (async function main() {
     list.replaceChildren();
     refreshSuggestions();
 
+    renderBags();
+
     // Leave the trash view once it is empty, so the list never ends up blank.
     if (showDeleted && !brews.some((b) => { const n = notes[b.key] || {}; return n.deleted && !n.purged; })) showDeleted = false;
 
@@ -350,7 +441,7 @@ if (typeof document !== "undefined") (async function main() {
     for (let i = brews.length - 1; i >= 0; i--) {
       const { deleted, purged } = notes[brews[i].key] || {};
       if (purged || !!deleted !== showDeleted) continue; // the trash view lists deleted brews only
-      if (filter !== "all" && brews[i].mode !== filter) continue;
+      if (!matches(brews[i])) continue;
       visible.push(i);
     }
     const pages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
@@ -394,7 +485,10 @@ if (typeof document !== "undefined") (async function main() {
         d.append(big, small);
         return d;
       };
-      const doseStat = stat("", "dose g"), ratioStat = stat("", "ratio");
+      const doseStat = stat("", "dose g"), ratioStat = stat("", "ratio"), ratingStat = stat("", "rating");
+      const showRating = () => { ratingStat.firstChild.textContent = n.rating ? "★".repeat(n.rating) : "–"; };
+      showRating();
+      ratingStat.firstChild.classList.add("stars");
       const showDose = () => {
         const dose = doseOf(b, n), r = ratioOf(b, n);
         doseStat.firstChild.textContent = dose ? dose.toFixed(1) : "Add";
@@ -408,6 +502,7 @@ if (typeof document !== "undefined") (async function main() {
         ratioStat,
         stat(`${Math.floor(b.seconds / 60)}:${String(b.seconds % 60).padStart(2, "0")}`, "time"),
         stat(f ? flowText(f) : "–", "g/s"),
+        ratingStat,
       );
       sum.append(top, stats);
 
@@ -420,10 +515,11 @@ if (typeof document !== "undefined") (async function main() {
       pill.className = "pill";
       const showPreview = () => {
         const grindText = n.grind ? `grind ${n.grind}${n.grinder ? ` (${n.grinder})` : ""}` : n.grinder;
-        const parts = [n.coffee, grindText, n.rating ? "★".repeat(n.rating) : "", n.taste].filter(Boolean);
+        const parts = [coffeeOf(n, bags), grindText, n.taste].filter(Boolean);
+        const noted = parts.length > 0 || !!n.rating;
         preview.textContent = [b.flag, ...parts].filter(Boolean).join(" · ");
-        pill.textContent = parts.length ? "Edit notes" : "Add notes";
-        pill.classList.toggle("quiet", parts.length > 0);
+        pill.textContent = noted ? "Edit notes" : "Add notes";
+        pill.classList.toggle("quiet", noted);
       };
       showPreview();
       foot.append(preview, pill);
@@ -432,8 +528,23 @@ if (typeof document !== "undefined") (async function main() {
 
       const form = document.createElement("div");
       form.className = "form";
-      const coffee = Object.assign(document.createElement("input"), { value: n.coffee || "", placeholder: "Beans, roaster" });
-      coffee.setAttribute("list", "coffees");
+      // Open bags, plus this brew's own bag even if finished, plus any text typed before bags existed.
+      const coffee = document.createElement("select");
+      const opt = (value, textContent) => Object.assign(document.createElement("option"), { value, textContent });
+      coffee.append(opt("", "–"));
+      for (const bag of bagList()) if (!bag.finished || bag.id === n.bag) coffee.append(opt(bag.id, bagLabel(bag)));
+      if (n.coffee && !bags[n.bag]) coffee.append(opt("typed", `${n.coffee} (typed earlier)`));
+      coffee.append(opt("new", "+ Add a coffee bag…"));
+      coffee.value = bags[n.bag] ? n.bag : n.coffee ? "typed" : "";
+      let picked = coffee.value;
+      coffee.addEventListener("change", (ev) => {
+        if (coffee.value !== "new") { picked = coffee.value; return; }
+        ev.stopPropagation(); // not a real choice: jump to the bags panel instead
+        coffee.value = picked;
+        $("bags").open = true;
+        $("bags").scrollIntoView({ block: "center" });
+        $("b-name").focus();
+      });
       const grinder = Object.assign(document.createElement("input"), { value: n.grinder || "", placeholder: "Grinder name" });
       grinder.setAttribute("list", "grinders");
       const grind = Object.assign(document.createElement("input"), { value: n.grind || "", placeholder: "Grinder setting" });
@@ -482,7 +593,11 @@ if (typeof document !== "undefined") (async function main() {
       }
       form.append(field("Coffee", coffee), field("Grinder", grinder), field("Grind setting", grind), field("Rating", rating), field("Taste", taste));
       const save = async () => {
-        Object.assign(n, { coffee: coffee.value.trim(), grinder: grinder.value.trim(), grind: grind.value.trim(), rating: Number(rating.value) || "", taste: taste.value.trim() });
+        if (coffee.value !== "typed") {
+          delete n.coffee;
+          if (bags[coffee.value]) n.bag = coffee.value; else delete n.bag;
+        }
+        Object.assign(n, { grinder: grinder.value.trim(), grind: grind.value.trim(), rating: Number(rating.value) || "", taste: taste.value.trim() });
         const d = Math.round(parseFloat(doseInput.value) * 10) / 10;
         if (d >= 1 && d <= 100 && d !== b.dose) n.dose = d; else delete n.dose;
         if (!n.dose) doseInput.value = b.dose || "";
@@ -490,7 +605,9 @@ if (typeof document !== "undefined") (async function main() {
         notes[b.key] = n;
         await tx(db, "notes", "readwrite", (s) => s.put(n));
         showPreview();
+        showRating();
         refreshSuggestions();
+        renderBags();
       };
       form.addEventListener("change", save);
       const close = Object.assign(document.createElement("button"), { type: "button", className: "primary", textContent: "Save" });
@@ -589,7 +706,7 @@ if (typeof document !== "undefined") (async function main() {
     }
   });
 
-  const STORES = ["pulls", "partials", "notes"];
+  const STORES = ["pulls", "partials", "notes", "bags"];
 
   // A backup holds everything: raw pulls with their sync times, and all notes.
   async function restoreBackup(backup) {
@@ -654,6 +771,25 @@ if (typeof document !== "undefined") (async function main() {
     setStatus(`Permanently deleted ${trash.length} brew${trash.length === 1 ? "" : "s"}.`);
   });
 
+  $("bagfilter").addEventListener("change", () => {
+    bagFilter = $("bagfilter").value;
+    page = 0;
+    render();
+  });
+
+  $("b-cancel").addEventListener("click", resetBagForm);
+  $("b-save").addEventListener("click", async () => {
+    const name = $("b-name").value.trim();
+    if (!name) { $("b-error").textContent = "Give the bag a name."; return; }
+    const bag = editingBag ? bags[editingBag] : { id: "bag:" + Date.now(), added: Date.now() };
+    Object.assign(bag, { name, roaster: $("b-roaster").value.trim(), roasted: $("b-roast").value });
+    await tx(db, "bags", "readwrite", (s) => s.put(bag));
+    bags[bag.id] = bag;
+    resetBagForm();
+    render();
+    setStatus(`Saved "${name}". Pick it under Coffee in a brew's notes.`);
+  });
+
   $("filters").addEventListener("click", (ev) => {
     const mode = ev.target.dataset.mode;
     if (!mode) return;
@@ -671,7 +807,7 @@ if (typeof document !== "undefined") (async function main() {
   $("older").addEventListener("click", () => turn(1));
 
   $("csv").addEventListener("click", () => {
-    download(`lumicurve-brews-${new Date().toISOString().slice(0, 10)}.csv`, toCsv(brews, notes), "text/csv");
+    download(`lumicurve-brews-${new Date().toISOString().slice(0, 10)}.csv`, toCsv(brews, notes, bags), "text/csv");
   });
 
   $("backup").addEventListener("click", async () => {

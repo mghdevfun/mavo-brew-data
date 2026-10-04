@@ -39,7 +39,14 @@
   .trash { display: flex; justify-content: space-between; gap: 12px; }
   button.link.bad { color: var(--bad); }
   .brew.gone { opacity: 0.55; border-style: dashed; }
-  .chips { display: flex; gap: 8px; margin: 4px 0 2px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 2px; }
+  .chips select { flex: 1 1 140px; width: auto; border-radius: 999px; padding: 6px 12px; font-size: 0.88rem; background: var(--card); }
+  .stats b.stars { font-size: 0.72rem; letter-spacing: -1px; line-height: 1.6rem; color: var(--accent); }
+  .bag { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .bag b, .bag small { display: block; }
+  .bag.done b { color: var(--muted); text-decoration: line-through; }
+  .bagacts { display: flex; gap: 12px; flex: none; }
+  #baglist:empty { display: none; }
   .chips button { border-radius: 999px; padding: 6px 14px; font-size: 0.88rem; }
   .chips button.on { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
   .pager { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 12px 0 4px; }
@@ -55,7 +62,7 @@
   .brew summary { list-style: none; padding: 12px 14px; cursor: pointer; }
   .brew summary::-webkit-details-marker { display: none; }
   .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-  .stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; margin: 10px 0 6px; text-align: center; }
+  .stats { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; margin: 10px 0 6px; text-align: center; }
   .stats b { display: block; font-size: 1.05rem; font-variant-numeric: tabular-nums; }
   .stats small { color: var(--muted); font-size: 0.72rem; }
   .stats b.add {
@@ -98,6 +105,7 @@
     <button data-mode="all">All</button>
     <button data-mode="espresso">Espresso</button>
     <button data-mode="pour-over">Pour-over</button>
+    <select id="bagfilter" aria-label="Filter by coffee"></select>
   </div>
 
   <div id="list"></div>
@@ -111,6 +119,20 @@
     <button id="deleted" class="link" hidden></button>
     <button id="purge" class="link bad" hidden></button>
   </div>
+
+  <details id="bags" class="brew">
+    <summary><div class="top"><strong>Coffee bags</strong><span id="bagcount" class="muted"></span></div></summary>
+    <div class="form">
+      <div id="baglist"></div>
+      <strong id="b-title">Add a bag</strong>
+      <label><span>Name</span><input id="b-name" placeholder="Coffee name"></label>
+      <label><span>Roaster, optional</span><input id="b-roaster"></label>
+      <label><span>Roast date, optional</span><input id="b-roast" type="date"></label>
+      <div id="b-error" class="muted bad"></div>
+      <button id="b-save" class="primary" type="button">Add bag</button>
+      <button id="b-cancel" class="link" type="button" hidden>Cancel edit</button>
+    </div>
+  </details>
 
   <div id="manual" class="brew manualform" hidden>
     <div class="form">
@@ -148,8 +170,7 @@
     <span id="version"></span>
   </p>
 </main>
-<datalist id="coffees"></datalist>
 <datalist id="grinders"></datalist>
-<script src="app.js?v=0a68adcd"></script>
+<script src="app.js?v=78876945"></script>
 </body>
 </html>

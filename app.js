@@ -189,13 +189,14 @@ if (typeof module !== "undefined") module.exports = { parseBrews, toCsv, withMan
 // then completes by itself as soon as that tab is closed.
 function openDb(onWaiting) {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open("lumicurve", 2); // 2: added the coffee bags store
+    const req = indexedDB.open("lumicurve", 3); // 2: coffee bags, 3: photos
     req.onupgradeneeded = () => {
       const db = req.result, have = db.objectStoreNames;
       if (!have.contains("pulls")) db.createObjectStore("pulls", { keyPath: "id", autoIncrement: true });
       if (!have.contains("partials")) db.createObjectStore("partials", { keyPath: "id", autoIncrement: true });
       if (!have.contains("notes")) db.createObjectStore("notes", { keyPath: "key" });
       if (!have.contains("bags")) db.createObjectStore("bags", { keyPath: "id" });
+      if (!have.contains("photos")) db.createObjectStore("photos", { keyPath: "key" });
     };
     req.onblocked = () => onWaiting && onWaiting();
     req.onsuccess = () => resolve(req.result);
@@ -211,6 +212,21 @@ function tx(db, store, mode, fn) {
     t.onerror = () => reject(t.error);
     t.onabort = () => reject(t.error);
   });
+}
+
+// ---------- Photos ----------
+
+const PHOTO_MAX = 800; // longest side in pixels; a graph on the scale's screen stays readable
+
+// Scales a picked image down and re-encodes it as JPEG, returned as a data URL (about 60-100 KB).
+async function shrinkPhoto(file) {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, PHOTO_MAX / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(bitmap.width * scale);
+  canvas.height = Math.round(bitmap.height * scale);
+  canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", 0.8);
 }
 
 // ---------- Bluetooth ----------
@@ -311,6 +327,7 @@ if (typeof document !== "undefined") (async function main() {
   const PAGE_SIZE = 20;
   let brews = [], notes = {}, bags = {}, showDeleted = false, filter = "all", bagFilter = "all", page = 0;
   let editingBag = null;
+  let photoKeys = new Set(); // brews that have a photo; the images themselves load on demand
 
   const setStatus = (msg, bad) => {
     $("status").textContent = msg;
@@ -322,6 +339,7 @@ if (typeof document !== "undefined") (async function main() {
     const noteRows = (await tx(db, "notes", "readonly", (s) => s.getAll())) || [];
     notes = Object.fromEntries(noteRows.map((n) => [n.key, n]));
     bags = Object.fromEntries(((await tx(db, "bags", "readonly", (s) => s.getAll())) || []).map((b) => [b.id, b]));
+    photoKeys = new Set(await tx(db, "photos", "readonly", (s) => s.getAllKeys()));
     brews = withManual(parseBrews(pulls), notes);
     render();
     $("empty").hidden = pulls.length > 0;
@@ -500,24 +518,38 @@ if (typeof document !== "undefined") (async function main() {
         d.append(big, small);
         return d;
       };
-      const doseStat = stat("", "dose g"), ratioStat = stat("", "ratio"), ratingStat = stat("", "rating");
+      // Dose, yield and ratio share one cell: "17.2 / 35.6" over "d / y (1:2.07)".
+      const doseStat = stat("", ""), ratingStat = stat("", "rating");
+      doseStat.className = "dyr";
       const showRating = () => { ratingStat.firstChild.textContent = n.rating ? "★".repeat(n.rating) : "–"; };
       showRating();
       ratingStat.firstChild.classList.add("stars");
       const showDose = () => {
         const dose = doseOf(b, n), r = ratioOf(b, n);
-        doseStat.firstChild.textContent = dose ? dose.toFixed(1) : "Add";
-        doseStat.firstChild.classList.toggle("add", !dose);
-        ratioStat.firstChild.textContent = r ? "1:" + r.toFixed(2) : "–";
+        const doseEl = Object.assign(document.createElement("span"), { textContent: dose ? dose.toFixed(1) : "Add", className: dose ? "" : "add" });
+        doseStat.firstChild.replaceChildren(doseEl, ` / ${b.weight !== null ? b.weight.toFixed(1) : "–"}`);
+        const ratioEl = Object.assign(document.createElement("span"), { textContent: r ? `(1:${r.toFixed(2)})` : "(–)", className: "ratio" });
+        doseStat.lastChild.replaceChildren("d / y ", ratioEl);
       };
       showDose();
+      const thumb = Object.assign(document.createElement("img"), { className: "thumb", alt: "Photo of the graph", hidden: true });
+      thumb.addEventListener("click", (ev) => {
+        ev.preventDefault(); // inside the summary: show the photo instead of toggling the card
+        showLightbox(thumb.src);
+      });
+      const loadPhoto = async () => {
+        const row = photoKeys.has(b.key) ? await tx(db, "photos", "readonly", (s) => s.get(b.key)) : null;
+        thumb.hidden = !row;
+        if (row) thumb.src = row.data;
+        return row;
+      };
+      loadPhoto();
       stats.append(
         doseStat,
-        stat(b.weight !== null ? b.weight.toFixed(1) : "–", "yield g"),
-        ratioStat,
         stat(`${Math.floor(b.seconds / 60)}:${String(b.seconds % 60).padStart(2, "0")}`, "time"),
         stat(f ? flowText(f) : "–", "g/s"),
         ratingStat,
+        thumb,
       );
       sum.append(top, stats);
 
@@ -556,8 +588,7 @@ if (typeof document !== "undefined") (async function main() {
         if (coffee.value !== "new") { picked = coffee.value; return; }
         ev.stopPropagation(); // not a real choice: jump to the bags panel instead
         coffee.value = picked;
-        $("bags").open = true;
-        $("bags").scrollIntoView({ block: "center" });
+        showPanel("bags");
         $("b-name").focus();
       });
       const grinder = Object.assign(document.createElement("input"), { value: n.grinder || "", placeholder: "Grinder name" });
@@ -625,6 +656,47 @@ if (typeof document !== "undefined") (async function main() {
         renderBags();
       };
       form.addEventListener("change", save);
+
+      const photoBox = document.createElement("div");
+      photoBox.className = "photo";
+      const showPhoto = async () => {
+        const row = await loadPhoto();
+        const pick = Object.assign(document.createElement("input"), { type: "file", accept: "image/*" });
+        pick.addEventListener("change", async (ev) => {
+          ev.stopPropagation(); // not a notes field
+          if (!pick.files[0]) return;
+          try {
+            const data = await shrinkPhoto(pick.files[0]); // before the transaction: it cannot wait
+            await tx(db, "photos", "readwrite", (s) => s.put({ key: b.key, data }));
+          } catch (e) {
+            return setStatus("That photo could not be read: " + e.message, true);
+          }
+          photoKeys.add(b.key);
+          keepStorage();
+          showPhoto();
+        });
+        const add = document.createElement("label");
+        add.className = "filebtn";
+        add.append(row ? "Replace photo" : "Add a photo of the graph", pick);
+        const parts = [];
+        if (row) {
+          const img = Object.assign(document.createElement("img"), { src: row.data, alt: "Photo of the graph" });
+          img.addEventListener("click", () => showLightbox(row.data));
+          const drop = Object.assign(document.createElement("button"), { type: "button", className: "link bad", textContent: "Remove photo" });
+          drop.addEventListener("click", async () => {
+            await tx(db, "photos", "readwrite", (s) => s.delete(b.key));
+            photoKeys.delete(b.key);
+            showPhoto();
+          });
+          parts.push(img, drop);
+        }
+        const title = document.createElement("span");
+        title.textContent = "Photo";
+        photoBox.replaceChildren(title, ...parts, add);
+      };
+      showPhoto();
+      form.append(photoBox);
+
       const close = Object.assign(document.createElement("button"), { type: "button", className: "primary", textContent: "Save" });
       close.addEventListener("click", async () => {
         await save();
@@ -662,14 +734,50 @@ if (typeof document !== "undefined") (async function main() {
     return d.toISOString().slice(0, 16); // value format of <input type="datetime-local">
   };
 
-  $("addmanual").addEventListener("click", () => {
-    $("manual").hidden = !$("manual").hidden;
-    if (!$("manual").hidden) {
-      $("m-when").value = localStamp(Date.now());
-      $("manual").scrollIntoView({ block: "center" });
+  function showLightbox(src) {
+    $("lightimg").src = src;
+    $("lightbox").hidden = false;
+  }
+  $("lightbox").addEventListener("click", () => { $("lightbox").hidden = true; });
+
+  // Ask the browser not to clear this site's data when the device runs low on space.
+  function keepStorage() {
+    if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+  }
+
+  // ----- Top bar: one panel open at a time, plus the menu -----
+
+  const PANELS = { manual: "addmanual", bags: "bagsbtn" };
+  function showPanel(name) {
+    for (const [id, button] of Object.entries(PANELS)) {
+      $(id).hidden = id !== name;
+      $(button).classList.toggle("on", id === name);
     }
+    if (name) $(name).scrollIntoView({ block: "nearest" });
+  }
+  const togglePanel = (name) => showPanel($(name).hidden ? name : null);
+
+  $("addmanual").addEventListener("click", () => {
+    togglePanel("manual");
+    if (!$("manual").hidden) $("m-when").value = localStamp(Date.now());
   });
-  $("m-cancel").addEventListener("click", () => { $("manual").hidden = true; });
+  $("m-cancel").addEventListener("click", () => showPanel(null));
+  $("bagsbtn").addEventListener("click", () => togglePanel("bags"));
+  $("b-close").addEventListener("click", () => showPanel(null));
+
+  const setMenu = (open) => {
+    $("menu").hidden = !open;
+    $("menubtn").setAttribute("aria-expanded", String(open));
+  };
+  $("menubtn").addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    setMenu($("menu").hidden);
+  });
+  $("menu").addEventListener("click", () => setMenu(false)); // choosing an item closes it
+  document.addEventListener("click", (ev) => {
+    if (!$("menu").hidden && !$("menu").contains(ev.target)) setMenu(false);
+  });
+  document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") setMenu(false); });
   $("m-save").addEventListener("click", async () => {
     const when = new Date($("m-when").value).getTime();
     const weight = Math.round(parseFloat($("m-yield").value) * 10) / 10;
@@ -683,7 +791,7 @@ if (typeof document !== "undefined") (async function main() {
     if (dose >= 1 && dose <= 100) n.dose = dose;
     await tx(db, "notes", "readwrite", (s) => s.put(n));
     for (const id of ["m-yield", "m-dose", "m-min", "m-sec"]) $(id).value = "";
-    $("manual").hidden = true;
+    showPanel(null);
     filter = "all"; showDeleted = false; page = 0;
     await reload();
     setStatus("Brew added. Open it to add notes.");
@@ -710,6 +818,7 @@ if (typeof document !== "undefined") (async function main() {
         setStatus(`Transfer stopped early (${res.text.length} of ${res.total} bytes). The partial data was saved separately.`, true);
       } else {
         await addPull(res.text, Date.now());
+        keepStorage();
         await reload();
         const added = brews.length - before;
         setStatus(`Synced. ${added} new brew${added === 1 ? "" : "s"}.`);
@@ -721,7 +830,7 @@ if (typeof document !== "undefined") (async function main() {
     }
   });
 
-  const STORES = ["pulls", "partials", "notes", "bags"];
+  const STORES = ["pulls", "partials", "notes", "bags", "photos"];
 
   // A backup holds everything: raw pulls with their sync times, and all notes.
   async function restoreBackup(backup) {
@@ -731,6 +840,7 @@ if (typeof document !== "undefined") (async function main() {
     await new Promise((resolve, reject) => {
       const t = db.transaction(STORES, "readwrite");
       for (const name of STORES) {
+        if (name === "photos" && !Array.isArray(backup.photos)) continue; // a backup without photos leaves them alone
         const store = t.objectStore(name);
         store.clear();
         for (const row of backup[name] || []) store.put(row);
@@ -772,11 +882,13 @@ if (typeof document !== "undefined") (async function main() {
     if (!trash.length) return;
     if (!confirm(`Permanently delete ${trash.length} brew${trash.length === 1 ? "" : "s"} and their notes? This cannot be undone.`)) return;
     await new Promise((resolve, reject) => {
-      const t = db.transaction("notes", "readwrite");
+      const t = db.transaction(["notes", "photos"], "readwrite");
       for (const n of trash) {
         const tomb = { key: n.key, deleted: true, purged: true };
         notes[n.key] = tomb;
         t.objectStore("notes").put(tomb);
+        t.objectStore("photos").delete(n.key);
+        photoKeys.delete(n.key);
       }
       t.oncomplete = resolve;
       t.onerror = t.onabort = () => reject(t.error);
@@ -805,9 +917,10 @@ if (typeof document !== "undefined") (async function main() {
       + "Newer brews are kept, including ones that used a finished bag: they keep the coffee's name.\n\n"
       + "This cannot be undone. Export a backup first if you might want them back.")) return;
     await new Promise((resolve, reject) => {
-      const t = db.transaction(["notes", "bags"], "readwrite");
+      const t = db.transaction(["notes", "bags", "photos"], "readwrite");
       const noteStore = t.objectStore("notes"), bagStore = t.objectStore("bags");
       for (const b of old) {
+        t.objectStore("photos").delete(b.key);
         if (b.manual) noteStore.delete(b.key);
         else noteStore.put({ key: b.key, deleted: true, purged: true });
       }
@@ -867,11 +980,18 @@ if (typeof document !== "undefined") (async function main() {
     download(`lumicurve-brews-${new Date().toISOString().slice(0, 10)}.csv`, toCsv(brews, notes, bags), "text/csv");
   });
 
-  $("backup").addEventListener("click", async () => {
+  async function exportBackup(withPhotos) {
     const backup = { app: "lumicurve", version: 1, exported: new Date().toISOString() };
-    for (const name of STORES) backup[name] = await tx(db, name, "readonly", (s) => s.getAll());
-    download(`lumicurve-backup-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(backup), "application/json");
-  });
+    for (const name of STORES) {
+      if (name === "photos" && !withPhotos) continue;
+      backup[name] = await tx(db, name, "readonly", (s) => s.getAll());
+    }
+    const text = JSON.stringify(backup);
+    download(`lumicurve-backup-${new Date().toISOString().slice(0, 10)}${withPhotos ? "" : "-no-photos"}.json`, text, "application/json");
+    setStatus(`Backup saved (${(text.length / 1048576).toFixed(1)} MB${withPhotos ? `, ${backup.photos.length} photo${backup.photos.length === 1 ? "" : "s"}` : ", without photos"}).`);
+  }
+  $("backup").addEventListener("click", () => exportBackup(true));
+  $("backuplite").addEventListener("click", () => exportBackup(false));
 
   if (VERSION) $("version").textContent = `Version ${VERSION}.`;
   if (!navigator.bluetooth) {

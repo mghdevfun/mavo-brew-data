@@ -28,7 +28,30 @@
     font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--text);
     border-radius: 10px; padding: 10px 14px; cursor: pointer;
   }
+  [hidden] { display: none !important; }
   button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; width: 100%; padding: 14px; }
+  .bar { display: flex; gap: 8px; align-items: stretch; }
+  .bar .primary { flex: 1; width: auto; min-width: 0; }
+  button.icon { flex: none; width: 48px; padding: 0; display: grid; place-items: center; }
+  button.icon svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  button.icon[aria-expanded="true"], button.icon.on { border-color: var(--accent); color: var(--accent); }
+  .menuwrap { position: relative; display: flex; }
+  .menu {
+    position: absolute; right: 0; top: calc(100% + 6px); z-index: 5; min-width: 210px; display: grid; gap: 2px; padding: 6px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  }
+  .menu > * { border: none; background: transparent; text-align: left; padding: 11px 12px; border-radius: 8px; font-size: 0.95rem; }
+  .menu > *:hover { background: var(--bg); }
+  .thumb { flex: none; width: 44px; height: 44px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); cursor: zoom-in; }
+  .photo { display: grid; gap: 8px; }
+  .photo > span { font-size: 0.78rem; color: var(--muted); }
+  .photo img { width: 100%; border-radius: 10px; cursor: zoom-in; }
+  .photo .filebtn { text-align: center; }
+  #lightbox { position: fixed; inset: 0; z-index: 20; background: rgba(0, 0, 0, 0.92); display: grid; place-items: center; padding: 12px; cursor: zoom-out; }
+  #lightbox img { max-width: 100%; max-height: 100%; border-radius: 8px; }
+  .panel { margin-top: 12px; }
+  .panel .form { border-top: none; padding-top: 14px; }
+  #status:empty { min-height: 0; margin: 6px 0; }
   button:disabled { opacity: 0.55; cursor: default; }
   button.danger { background: transparent; border-color: transparent; color: var(--bad); width: 100%; padding: 8px; font-size: 0.9rem; }
   button.link { background: transparent; border: none; color: var(--muted); text-decoration: underline; padding: 6px 0; font-size: 0.88rem; }
@@ -52,8 +75,6 @@
   .pager { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 12px 0 4px; }
   .pager button { padding: 8px 14px; font-size: 0.9rem; }
   a { color: var(--accent); }
-  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 4px; }
-  .actions > * { flex: 1 1 auto; text-align: center; font-size: 0.9rem; }
   .filebtn input { display: none; }
   #status { min-height: 1.5em; margin: 10px 0; font-size: 0.9rem; color: var(--muted); }
   #status.bad { color: var(--bad); }
@@ -62,10 +83,14 @@
   .brew summary { list-style: none; padding: 12px 14px; cursor: pointer; }
   .brew summary::-webkit-details-marker { display: none; }
   .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-  .stats { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; margin: 10px 0 6px; text-align: center; }
+  .top strong { white-space: nowrap; }
+  .top .muted { text-align: right; font-size: 0.8rem; }
+  .stats { display: grid; grid-template-columns: minmax(0, 2.3fr) 1fr 1fr 1fr 44px; gap: 6px; align-items: center; margin: 10px 0 6px; text-align: center; }
+  .stats .dyr { text-align: left; white-space: nowrap; }
+  .stats .ratio { color: var(--text); font-weight: 600; }
   .stats b { display: block; font-size: 1.05rem; font-variant-numeric: tabular-nums; }
   .stats small { color: var(--muted); font-size: 0.72rem; }
-  .stats b.add {
+  .stats .add {
     display: inline-block; font-size: 0.8rem; color: var(--accent); border: 1px solid var(--accent);
     border-radius: 999px; padding: 1px 10px;
   }
@@ -93,8 +118,63 @@
     <span id="count" class="muted"></span>
   </header>
 
-  <button id="sync" class="primary">Connect and sync</button>
+  <div class="bar">
+    <button id="sync" class="primary">Connect and sync</button>
+    <button id="addmanual" class="icon" type="button" aria-label="Add a brew by hand" title="Add a brew by hand">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10h11v5a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4z"/><path d="M14 11h1.5a2.5 2.5 0 0 1 0 5H14"/><path d="M19 3v6M16 6h6"/></svg>
+    </button>
+    <button id="bagsbtn" class="icon" type="button" aria-label="Coffee bags" title="Coffee bags">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="12" rx="6" ry="9" transform="rotate(35 12 12)"/><path d="M7.6 18.6c3-2.2 1.4-4.600 4.400-6.600s1.400-4.400 4.400-6.600"/></svg>
+    </button>
+    <div class="menuwrap">
+      <button id="menubtn" class="icon" type="button" aria-label="More options" title="More options" aria-expanded="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+      <div id="menu" class="menu" hidden>
+        <button id="csv" type="button">Export CSV</button>
+        <button id="backup" type="button">Export backup with photos</button>
+        <button id="backuplite" type="button">Export backup without photos</button>
+        <label class="filebtn">Import backup<input id="import" type="file" accept=".json,.txt,application/json,text/plain"></label>
+        <button id="cleanup" type="button">Clean up old brews</button>
+      </div>
+    </div>
+  </div>
   <div id="status"></div>
+
+  <div id="manual" class="brew manualform panel" hidden>
+    <div class="form">
+      <strong>Add a brew by hand</strong>
+      <label><span>Date and time</span><input id="m-when" type="datetime-local"></label>
+      <label><span>Type</span>
+        <select id="m-mode"><option value="espresso">Espresso</option><option value="pour-over">Pour-over</option></select>
+      </label>
+      <label><span>Dose (g), optional</span><input id="m-dose" type="number" min="1" max="100" step="0.1" inputmode="decimal"></label>
+      <label><span>Yield (g)</span><input id="m-yield" type="number" min="0" step="0.1" inputmode="decimal"></label>
+      <div class="two">
+        <label><span>Time, minutes</span><input id="m-min" type="number" min="0" step="1" inputmode="numeric" placeholder="0"></label>
+        <label><span>seconds</span><input id="m-sec" type="number" min="0" max="59" step="1" inputmode="numeric" placeholder="0"></label>
+      </div>
+      <div id="m-error" class="muted bad"></div>
+      <button id="m-save" class="primary" type="button">Add brew</button>
+      <button id="m-cancel" class="link" type="button">Cancel</button>
+    </div>
+  </div>
+
+  <div id="bags" class="brew panel" hidden>
+    <div class="form">
+      <div class="top"><strong>Coffee bags</strong><span id="bagcount" class="muted"></span></div>
+      <div id="baglist"></div>
+      <strong id="b-title">Add a bag</strong>
+      <label><span>Name</span><input id="b-name" placeholder="Coffee name"></label>
+      <label><span>Roaster, optional</span><input id="b-roaster"></label>
+      <label><span>Roast date, optional</span><input id="b-roast" type="text" autocomplete="off" placeholder="e.g. 20 Sep 2026"></label>
+      <div id="b-error" class="muted bad"></div>
+      <button id="b-save" class="primary" type="button">Add bag</button>
+      <button id="b-cancel" class="link" type="button" hidden>Cancel edit</button>
+      <button id="b-close" class="link" type="button">Close</button>
+    </div>
+  </div>
+
 
   <div id="empty" hidden>
     No brews yet. Wake the scale, unplug it from the charger and press <b>Connect and sync</b>,
@@ -120,50 +200,10 @@
     <button id="purge" class="link bad" hidden></button>
   </div>
 
-  <details id="bags" class="brew">
-    <summary><div class="top"><strong>Coffee bags</strong><span id="bagcount" class="muted"></span></div></summary>
-    <div class="form">
-      <div id="baglist"></div>
-      <strong id="b-title">Add a bag</strong>
-      <label><span>Name</span><input id="b-name" placeholder="Coffee name"></label>
-      <label><span>Roaster, optional</span><input id="b-roaster"></label>
-      <label><span>Roast date, optional</span><input id="b-roast" type="text" autocomplete="off" placeholder="e.g. 20 Sep 2026"></label>
-      <div id="b-error" class="muted bad"></div>
-      <button id="b-save" class="primary" type="button">Add bag</button>
-      <button id="b-cancel" class="link" type="button" hidden>Cancel edit</button>
-    </div>
-  </details>
-
-  <div id="manual" class="brew manualform" hidden>
-    <div class="form">
-      <strong>Add a brew by hand</strong>
-      <label><span>Date and time</span><input id="m-when" type="datetime-local"></label>
-      <label><span>Type</span>
-        <select id="m-mode"><option value="espresso">Espresso</option><option value="pour-over">Pour-over</option></select>
-      </label>
-      <label><span>Dose (g), optional</span><input id="m-dose" type="number" min="1" max="100" step="0.1" inputmode="decimal"></label>
-      <label><span>Yield (g)</span><input id="m-yield" type="number" min="0" step="0.1" inputmode="decimal"></label>
-      <div class="two">
-        <label><span>Time, minutes</span><input id="m-min" type="number" min="0" step="1" inputmode="numeric" placeholder="0"></label>
-        <label><span>seconds</span><input id="m-sec" type="number" min="0" max="59" step="1" inputmode="numeric" placeholder="0"></label>
-      </div>
-      <div id="m-error" class="muted bad"></div>
-      <button id="m-save" class="primary" type="button">Add brew</button>
-      <button id="m-cancel" class="link" type="button">Cancel</button>
-    </div>
-  </div>
-
-  <div class="actions">
-    <button id="addmanual">Add brew by hand</button>
-    <button id="cleanup">Clean up old brews</button>
-    <button id="csv">Export CSV</button>
-    <button id="backup">Export backup</button>
-    <label class="filebtn">Import backup<input id="import" type="file" accept=".json,.txt,application/json,text/plain"></label>
-  </div>
   <p class="muted">
     Syncing moves the log off the scale and into this browser, so clearing this site's data would erase
-    the history. Export a backup now and then: it holds everything, including your notes, and can be
-    imported on any device. The CSV is for spreadsheets.
+    the history. Export a backup now and then: it holds everything, including your notes and photos, and
+    can be imported on any device. The CSV is for spreadsheets. Both are in the menu at the top.
   </p>
   <p class="muted">
     Unofficial tool, not affiliated with MAVO. Use at your own risk:
@@ -171,7 +211,8 @@
     <span id="version"></span>
   </p>
 </main>
+<div id="lightbox" hidden><img id="lightimg" alt="Photo of the graph"></div>
 <datalist id="grinders"></datalist>
-<script src="app.js?v=82720b80"></script>
+<script src="app.js?v=cd6330b4"></script>
 </body>
 </html>

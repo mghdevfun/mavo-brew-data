@@ -996,7 +996,11 @@ if (typeof document !== "undefined") (async function main() {
   if (VERSION) $("version").textContent = `Version ${VERSION}.`;
   if (!navigator.bluetooth) {
     $("sync").disabled = true;
-    setStatus("This browser has no Web Bluetooth. Use Chrome or Edge.", true);
+    // Every browser on iPhone and iPad is Safari underneath, Chrome included, and has no Web Bluetooth.
+    const apple = /iPhone|iPad|iPod/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+    setStatus(apple
+      ? "Browsers on iPhone and iPad cannot use Bluetooth from a web page, and that includes Chrome. The free Bluefy browser app may be able to sync, but that is untested. You can still view and import your history here."
+      : "This browser cannot use Bluetooth. To sync, use Chrome or Edge on Android or on a computer.", true);
   }
   await reload();
 })();

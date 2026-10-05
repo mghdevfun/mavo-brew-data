@@ -33,7 +33,30 @@ Everything is stored in the browser on your own device. Nothing is sent to a ser
 
 - A MAVO Lumicurve scale (tested on firmware 008.06).
 - Chrome or Edge on Android, Windows, macOS, Linux or ChromeOS. These support Web Bluetooth.
-  Safari and Firefox do not, so this does not work on an iPhone or iPad.
+- On iPhone or iPad: possibly the free
+  [Bluefy](https://apps.apple.com/app/bluefy-web-ble-browser/id1492822055) browser app, but this
+  is unproven. See the note below.
+- Firefox does not support Web Bluetooth on any system.
+
+### iPhone and iPad: what is and isn't known
+
+Safari, Chrome and every other regular browser on iPhone and iPad run on Safari's engine, which
+has no Web Bluetooth. In those browsers the app opens and can show an imported history, but it
+cannot sync.
+
+Bluefy is a separate browser app that adds Web Bluetooth. What has been checked so far is only
+that the app opens in Bluefy and that Bluefy offers it Bluetooth. **Nobody has yet synced a scale
+this way.** Still unknown:
+
+- whether a sync completes and the brews appear
+- whether the history survives closing the app, or a few days without opening it (iOS clears
+  website data more readily than Android)
+- whether the backup and CSV exports produce a file you can save
+- whether adding a photo works from the camera and the library
+
+If you try it, export a backup after your first sync and check that the file opens, before you
+rely on it. Syncing moves the log off the scale, so a history that iOS later clears is gone.
+Reports are welcome in the repository's issues.
 
 ## How to use it
 

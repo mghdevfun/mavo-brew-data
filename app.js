@@ -990,6 +990,16 @@ if (typeof document !== "undefined") (async function main() {
     download(`lumicurve-backup-${new Date().toISOString().slice(0, 10)}${withPhotos ? "" : "-no-photos"}.json`, text, "application/json");
     setStatus(`Backup saved (${(text.length / 1048576).toFixed(1)} MB${withPhotos ? `, ${backup.photos.length} photo${backup.photos.length === 1 ? "" : "s"}` : ", without photos"}).`);
   }
+  // The scale's own log text from every sync, oldest first, as one readable file.
+  $("rawlog").addEventListener("click", async () => {
+    const pulls = await tx(db, "pulls", "readonly", (s) => s.getAll());
+    const text = pulls.map((p, i) => {
+      const when = p.time ? new Date(p.time).toISOString() : "unknown time";
+      return `===== sync ${i + 1} of ${pulls.length} · ${p.imported ? "imported" : "synced"} ${when} · ${p.text.length} characters =====\n${p.text}`;
+    }).join("\n");
+    download(`lumicurve-log-${new Date().toISOString().slice(0, 10)}.txt`, text + "\n", "text/plain");
+    setStatus(`Log saved (${pulls.length} sync${pulls.length === 1 ? "" : "s"}, ${(text.length / 1024).toFixed(0)} KB).`);
+  });
   $("backup").addEventListener("click", () => exportBackup(true));
   $("backuplite").addEventListener("click", () => exportBackup(false));
 
